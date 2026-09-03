@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Visor Plan Regulador - Las Condes (POC)</title>
+<script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+<link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; margin: 0; font-family: -apple-system, BlinkMacSystemFont, sans-serif; overscroll-behavior: none; }
+  #map { position: fixed; inset: 0; height: 100dvh; width: 100vw; }
+
+  #panel-toggle, #edif-quick-toggle {
+    display: none;
+  }
+
+  #panel {
+    position: absolute; top: 10px; left: 10px; z-index: 1;
+    background: white; padding: 12px 16px; border-radius: 10px;
+    font-size: 13px; box-shadow: 0 2px 10px rgba(0,0,0,.25); width: 270px;
+    max-height: calc(100dvh - 20px); overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  #panel h3 { margin: 0 0 8px; font-size: 15px; }
+  #panel h4 { margin: 0 0 4px; font-size: 12px; color: #555; text-transform: uppercase; letter-spacing: .02em; }
+  .legend-row { display: flex; align-items: center; gap: 8px; margin: 2px 0; cursor: pointer; padding: 4px 2px; border-radius: 6px; }
+  .legend-row input { margin: 0; flex-shrink: 0; width: 16px; height: 16px; }
+  .swatch { width: 14px; height: 14px; border-radius: 3px; flex-shrink: 0; border: 1px solid rgba(0,0,0,.2); }
+  .pat-swatch { width: 18px; height: 14px; border: 1px solid #999; background-color: #eee; flex-shrink: 0; background-repeat: repeat; }
+  .maplibregl-popup { max-width: min(88vw, 320px) !important; }
+  .maplibregl-popup-content { font-size: 13px; padding: 14px; }
+  .opt { margin-top: 10px; padding-top: 8px; border-top: 1px solid #eee; }
+  .toolrow { display: flex; gap: 6px; margin-bottom: 4px; }
+  .toolrow button { font-size: 12px; padding: 5px 10px; border: 1px solid #ccc; border-radius: 6px; background: #f5f5f5; cursor: pointer; }
+
+  /* --- mobile: panel se convierte en hoja inferior colapsable --- */
+  @media (max-width: 720px), (pointer: coarse) and (max-width: 900px) {
+    #panel-toggle {
+      display: flex; align-items: center; justify-content: space-between;
+      position: absolute; left: 12px; right: 12px; bottom: 12px; z-index: 2;
+      background: white; padding: 14px 16px; border-radius: 14px;
+      box-shadow: 0 2px 14px rgba(0,0,0,.3); font-size: 15px; font-weight: 600;
+      cursor: pointer; user-select: none;
+    }
+    #panel-toggle .chev { transition: transform .2s ease; font-size: 13px; color: #888; }
+    #panel-toggle.open .chev { transform: rotate(180deg); }
+
+    #edif-quick-toggle {
+      display: block;
+      position: absolute; right: 12px; bottom: 72px; z-index: 2;
+      background: white; color: #222; border: none;
+      padding: 7px 12px; border-radius: 999px; font-size: 12.5px; font-weight: 600;
+      box-shadow: 0 2px 10px rgba(0,0,0,.25); cursor: pointer; user-select: none;
+    }
+    #edif-quick-toggle.active { background: #222; color: white; }
+
+    #panel {
+      left: 0; right: 0; top: auto; bottom: 0; width: 100%;
+      max-height: 62dvh; border-radius: 16px 16px 0 0;
+      padding: 14px 16px calc(78px + env(safe-area-inset-bottom));
+      transform: translateY(100%); transition: transform .25s ease;
+      box-shadow: 0 -2px 20px rgba(0,0,0,.3);
+    }
+    #panel.open { transform: translateY(0); }
+    #panel h3 { display: none; } /* el titulo ya esta en el toggle */
+
+    .legend-row { padding: 8px 4px; }
+    .legend-row input { width: 20px; height: 20px; }
+    .toolrow button { padding: 8px 14px; font-size: 13px; }
+    .maplibregl-ctrl-top-right { top: 10px; }
+  }
+</style>
+</head>
+<body>
+<div id="panel">
+  <h3>Las Condes — Plan Regulador</h3>
+
+  <h4>Uso de Suelo</h4>
+  <div class="toolrow">
+    <button id="uso-all">Todos</button><button id="uso-none">Ninguno</button>
+  </div>
+  <div id="legend-uso"></div>
+
+  <div class="opt">
+    <label class="legend-row"><input type="checkbox" id="chk-edif"><b>+ Edificación (trama = altura)</b></label>
+    <div class="toolrow" id="edif-tools" style="display:none;">
+      <button id="edif-all">Todos</button><button id="edif-none">Ninguno</button>
+    </div>
+    <div id="legend-edif" style="margin-top:4px;display:none;"></div>
+  </div>
+
+  <div class="opt"><label class="legend-row"><input type="checkbox" id="chk-quebradas" checked> Restricción de quebradas</label></div>
+</div>
+<button id="edif-quick-toggle">+ Agregar Edificación</button>
+<div id="panel-toggle"><span>🗺️ Capas del plano</span><span class="chev">▲</span></div>
+<div id="map"></div>
+<script>
+const USO = {
+  file: 'uso_suelo_zonas.geojson',
+  colors: {
+    "UvO":"#f4d35e", "Uv3":"#ee964b", "Uv2":"#f95738",
+    "UC1":"#8ecae6", "UC2":"#219ebc", "UC3":"#023047", "UM":"#6a4c93",
+    "UEe1":"#606c38", "UEe2":"#90a955", "UEe3":"#31572c", "UEe4":"#4f772d", "UEe5":"#bc6c25"
+  },
+  labels: {
+    "UvO":"UvO — Vivienda + oficina", "Uv3":"Uv3 — Vivienda + of. restringido", "Uv2":"Uv2 — Uso de vivienda N°2",
+    "UC1":"UC1 — Comercio comunal", "UC2":"UC2 — Comercio metropolitano", "UC3":"UC3 — Taller y comercio menor",
+    "UM":"UM — Comercio escala metrop.",
+    "UEe1":"UEe1 — Equipamiento intercomunal", "UEe2":"UEe2 — Recreacional deportivo",
+    "UEe3":"UEe3 — Parques intercomunales", "UEe4":"UEe4 — Parques metropolitanos", "UEe5":"UEe5 — Interés patrimonial"
+  }
+};
+// nota: la zona base "UV" (sin marca grafica propia en el plano) queda
+// intencionalmente sin poligono - ver conversacion sobre "Default_usuelo".
+
+const EDIF_TIER = {
+  "EAa1":"alta", "EAa2":"alta", "EAa3":"alta", "EAa4":"alta", "EAa+ca":"alta", "EAa+cm":"alta",
+  "EAm1":"media", "EAm1p":"media", "EAm2":"media", "EAm4":"media",
+  "EAb4":"baja", "EAb4p":"baja",
+  "Ee1":"equip", "Ee2":"equip", "Ee3":"equip", "Ee4":"equip", "Ee5":"equip"
+};
+const TIER_PATTERN = { alta: "pat_alta.png", media: "pat_media.png", baja: "pat_baja.png", equip: "pat_equip.png" };
+const TIER_LABEL = { alta: "Aislada alta", media: "Aislada media", baja: "Aislada baja", equip: "Equipamiento" };
+// Norma de pisos/altura por codigo, extraida de la Ordenanza PRC Texto
+// Refundido (vigente 2021, archivos.lascondes.cl). OJO: no verificado contra
+// el texto exacto vigente en la fecha del plano (Mod. N8, feb-2010) - las
+// normas pueden haber cambiado en modificaciones posteriores. Usar como
+// referencia, no como dato legal definitivo.
+const NORMAS_EDIF = {
+  "EAb4":{"base_pisos":3,"base_altura_m":10.5,"max_pisos":4,"max_altura_m":14.0},
+  "EAb4p":{"base_pisos":3,"base_altura_m":10.5,"max_pisos":4,"max_altura_m":14.0},
+  "EAm1":{"base_pisos":3,"base_altura_m":10.5,"max_pisos":4,"max_altura_m":14.0},
+  "EAm1p":{"base_pisos":3,"base_altura_m":10.5,"max_pisos":7,"max_altura_m":24.5},
+  "EAm2":{"base_pisos":3,"base_altura_m":10.5,"max_pisos":7,"max_altura_m":20.0},
+  "EAm4":{"base_pisos":3,"base_altura_m":10.5,"max_pisos":12,"max_altura_m":42.0},
+  "EAa1":{"base_pisos":3,"base_altura_m":10.5,"max_pisos":12,"max_altura_m":42.0},
+  "EAa2":{"base_pisos":3,"base_altura_m":10.5,"max_pisos":15,"max_altura_m":52.5},
+  "EAa3":{"base_pisos":3,"base_altura_m":10.5,"max_pisos":15,"max_altura_m":52.5},
+  "EAa4":{"base_pisos":3,"base_altura_m":10.5,"max_pisos":12,"max_altura_m":42.0},
+  "EAa+cm":{"base_pisos":3,"base_altura_m":10.5,"max_pisos":17,"max_altura_m":59.5},
+  "EAa+ca":{"base_pisos":3,"base_altura_m":10.5,"max_pisos":15,"max_altura_m":52.5}
+};
+
+const TIER_SUMMARY = {
+  alta: "edificación aislada alta", media: "edificación aislada media",
+  baja: "edificación aislada baja", equip: "equipamiento (no residencial)"
+};
+// frase corta de que uso permite cada codigo, para el resumen "que se puede construir"
+const USO_SUMMARY = {
+  "UvO":"vivienda + oficina", "Uv3":"vivienda + oficina restringido", "Uv2":"vivienda",
+  "UC1":"comercio a escala comunal", "UC2":"comercio a escala metropolitana", "UC3":"taller y comercio menor",
+  "UM":"comercio de escala metropolitana e instituciones",
+  "UEe1":"equipamiento intercomunal (no residencial)", "UEe2":"equipamiento recreacional (no residencial)",
+  "UEe3":"parque (no edificable)", "UEe4":"parque metropolitano (no edificable)", "UEe5":"área patrimonial (edificación restringida)"
+};
+const EDIF_LABELS = {
+  "EAa1":"EAa1", "EAa2":"EAa2", "EAa3":"EAa3", "EAa4":"EAa4",
+  "EAa+ca":"EAa+ca (+com. adosado)", "EAa+cm":"EAa+cm (+com. metrop.)",
+  "EAm1":"EAm1", "EAm1p":"EAm1'", "EAm2":"EAm2", "EAm4":"EAm4",
+  "EAb4":"EAb4", "EAb4p":"EAb4'",
+  "Ee1":"Ee1 — Equip. intercomunal", "Ee2":"Ee2 — Recreacional deportivo",
+  "Ee3":"Ee3 — Parques intercomunales", "Ee4":"Ee4 — Parques metropolitanos", "Ee5":"Ee5 — Interés patrimonial"
+};
+
+let hoveredId = null;
+let edifLoaded = false;
+const activeUso = new Set(Object.keys(USO.colors));
+const activeEdif = new Set(Object.keys(EDIF_TIER));
+
+function buildMatchExpr(colors) {
+  const expr = ['match', ['get', 'codigo']];
+  Object.entries(colors).forEach(([k, v]) => { expr.push(k, v); });
+  expr.push('#999999');
+  return expr;
+}
+
+function usoFilter() {
+  return ['in', ['get', 'codigo'], ['literal', Array.from(activeUso)]];
+}
+function edifFilter() {
+  return ['in', ['get', 'codigo'], ['literal', Array.from(activeEdif)]];
+}
+
+function renderUsoLegend() {
+  const legend = document.getElementById('legend-uso');
+  legend.innerHTML = '';
+  Object.keys(USO.colors).forEach(code => {
+    const row = document.createElement('label');
+    row.className = 'legend-row';
+    row.innerHTML = `<input type="checkbox" checked data-code="${code}"><span class="swatch" style="background:${USO.colors[code]}"></span><span>${USO.labels[code]}</span>`;
+    row.querySelector('input').addEventListener('change', (e) => {
+      if (e.target.checked) activeUso.add(code); else activeUso.delete(code);
+      if (map.getLayer('zonas-fill')) {
+        map.setFilter('zonas-fill', usoFilter());
+        map.setFilter('zonas-outline', usoFilter());
+      }
+    });
+    legend.appendChild(row);
+  });
+}
+
+function renderEdifLegend() {
+  const legend = document.getElementById('legend-edif');
+  legend.innerHTML = '';
+  Object.entries(TIER_LABEL).forEach(([tier, tierLabel]) => {
+    const header = document.createElement('div');
+    header.innerHTML = `<span class="pat-swatch" style="background-image:url(${TIER_PATTERN[tier]})"></span> <b style="font-size:11px;">${tierLabel}</b>`;
+    header.style.margin = '6px 0 2px';
+    legend.appendChild(header);
+    Object.entries(EDIF_TIER).filter(([, t]) => t === tier).forEach(([code]) => {
+      const row = document.createElement('label');
+      row.className = 'legend-row';
+      row.style.marginLeft = '10px';
+      row.innerHTML = `<input type="checkbox" checked data-code="${code}"><span>${EDIF_LABELS[code] || code}</span>`;
+      row.querySelector('input').addEventListener('change', (e) => {
+        if (e.target.checked) activeEdif.add(code); else activeEdif.delete(code);
+        if (map.getLayer('edif-pattern')) {
+          map.setFilter('edif-pattern', edifFilter());
+          map.setFilter('edif-outline', edifFilter());
+        }
+      });
+      legend.appendChild(row);
+    });
+  });
+}
+
+const map = new maplibregl.Map({
+  container: 'map',
+  style: {
+    version: 8,
+    sources: {
+      osm: { type: 'raster', tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'], tileSize: 256, attribution: '© OpenStreetMap contributors' }
+    },
+    layers: [{ id: 'osm', type: 'raster', source: 'osm', paint: { 'raster-opacity': 0.6 } }]
+  },
+  center: [-70.55, -33.40],
+  zoom: 13,
+  dragRotate: false,
+  pitchWithRotate: false,
+  touchPitch: false
+});
+window.map = map;
+map.touchZoomRotate.disableRotation();
+map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
+
+const panelEl = document.getElementById('panel');
+const panelToggle = document.getElementById('panel-toggle');
+panelToggle.addEventListener('click', () => {
+  const willOpen = !panelEl.classList.contains('open');
+  panelEl.classList.toggle('open', willOpen);
+  panelToggle.classList.toggle('open', willOpen);
+});
+
+async function loadZonas() {
+  const data = await fetch(USO.file).then(r => r.json());
+  const matchExpr = buildMatchExpr(USO.colors);
+
+  await safeAddSource('zonas', { type: 'geojson', data, generateId: true });
+  map.addLayer({
+    id: 'zonas-fill', type: 'fill', source: 'zonas', filter: usoFilter(),
+    paint: { 'fill-color': matchExpr, 'fill-opacity': ['case', ['boolean', ['feature-state', 'hover'], false], 0.85, 0.55] }
+  }, 'quebradas-fill');
+  map.addLayer({ id: 'zonas-outline', type: 'line', source: 'zonas', filter: usoFilter(), paint: { 'line-color': '#222', 'line-width': 0.6 } }, 'quebradas-fill');
+
+  map.on('mousemove', 'zonas-fill', (e) => {
+    map.getCanvas().style.cursor = 'pointer';
+    if (e.features.length === 0) return;
+    if (hoveredId !== null) map.setFeatureState({ source: 'zonas', id: hoveredId }, { hover: false });
+    hoveredId = e.features[0].id;
+    map.setFeatureState({ source: 'zonas', id: hoveredId }, { hover: true });
+  });
+  map.on('mouseleave', 'zonas-fill', () => {
+    map.getCanvas().style.cursor = '';
+    if (hoveredId !== null) map.setFeatureState({ source: 'zonas', id: hoveredId }, { hover: false });
+    hoveredId = null;
+  });
+  renderUsoLegend();
+}
+
+function loadPatternImage(name, file) {
+  return new Promise((resolve, reject) => {
+    map.loadImage(file, (err, img) => {
+      if (err) { reject(err); return; }
+      if (!map.hasImage(name)) map.addImage(name, img);
+      resolve();
+    });
+  });
+}
+
+async function loadEdificacionTrama() {
+  if (edifLoaded) return;
+  edifLoaded = true;
+
+  await Promise.all(Object.entries(TIER_PATTERN).map(([tier, file]) => loadPatternImage(tier, file)));
+
+  const data = await fetch('edificacion_zonas.geojson').then(r => r.json());
+  data.features.forEach(f => { f.properties.__tier = EDIF_TIER[f.properties.codigo] || 'alta'; });
+
+  const patternExpr = ['match', ['get', '__tier']];
+  Object.keys(TIER_PATTERN).forEach(tier => patternExpr.push(tier, tier));
+  patternExpr.push('alta');
+
+  // se cargan siempre (opacidad 0 por defecto) para que el resumen "que se
+  // puede construir" funcione al pinchar aunque la trama visual este apagada;
+  // el checkbox solo controla si se VE, no si esta disponible para consultar.
+  await safeAddSource('edif', { type: 'geojson', data });
+  map.addLayer({
+    id: 'edif-pattern', type: 'fill', source: 'edif', filter: edifFilter(),
+    paint: { 'fill-pattern': patternExpr, 'fill-opacity': 0 }
+  });
+  map.addLayer({ id: 'edif-outline', type: 'line', source: 'edif', filter: edifFilter(), paint: { 'line-color': '#333', 'line-width': 0.4, 'line-dasharray': [2,1], 'line-opacity': 0 } });
+
+  renderEdifLegend();
+}
+
+function setEdifVisible(visible) {
+  if (!map.getLayer('edif-pattern')) return;
+  map.setPaintProperty('edif-pattern', 'fill-opacity', visible ? 0.9 : 0);
+  map.setPaintProperty('edif-outline', 'line-opacity', visible ? 1 : 0);
+}
+
+async function waitForStyle(maxMs) {
+  const start = Date.now();
+  while (Date.now() - start < maxMs) {
+    try { map.getStyle(); if (map.style && map.style._loaded && map.isStyleLoaded()) return; } catch (e) {}
+    await new Promise(r => setTimeout(r, 200));
+  }
+}
+
+async function safeAddSource(id, def) {
+  for (let attempt = 0; attempt < 60; attempt++) {
+    try { map.addSource(id, def); return; }
+    catch (e) {
+      if (attempt === 59) { console.error('safeAddSource giving up for', id, e); throw e; }
+      await new Promise(r => setTimeout(r, 400));
+    }
+  }
+}
+
+async function loadQuebradas() {
+  await safeAddSource('quebradas', { type: 'geojson', data: 'restriccion_quebradas.geojson' });
+  map.addLayer({ id: 'quebradas-fill', type: 'fill', source: 'quebradas', paint: { 'fill-color': '#d7263d', 'fill-opacity': 0.45 } });
+  map.addLayer({ id: 'quebradas-line', type: 'line', source: 'quebradas', paint: { 'line-color': '#d7263d', 'line-width': 1 } });
+}
+
+(async () => {
+  await waitForStyle(10000);
+
+  // Portal Inmobiliario devuelve 404 si el area de busqueda es demasiado
+  // chica (probado: falla bajo ~0.001 grados de radio, ~110m). Los
+  // poligonos pequenos del plano se expanden a un tamano minimo, centrados,
+  // para que la consulta de precio no se rompa en zonas chicas.
+  const MIN_BBOX_DEG = 0.0015;
+
+  function bboxOfGeometry(geom) {
+    const ring = geom.type === 'Polygon' ? geom.coordinates[0] : geom.coordinates[0][0];
+    let lon0 = Infinity, lon1 = -Infinity, lat0 = Infinity, lat1 = -Infinity;
+    ring.forEach(([lon, lat]) => {
+      lon0 = Math.min(lon0, lon); lon1 = Math.max(lon1, lon);
+      lat0 = Math.min(lat0, lat); lat1 = Math.max(lat1, lat);
+    });
+    if (lon1 - lon0 < MIN_BBOX_DEG * 2) {
+      const cx = (lon0 + lon1) / 2;
+      lon0 = cx - MIN_BBOX_DEG; lon1 = cx + MIN_BBOX_DEG;
+    }
+    if (lat1 - lat0 < MIN_BBOX_DEG * 2) {
+      const cy = (lat0 + lat1) / 2;
+      lat0 = cy - MIN_BBOX_DEG; lat1 = cy + MIN_BBOX_DEG;
+    }
+    return { lon0, lon1, lat0, lat1 };
+  }
+
+  // Poligono cuadrado temporal (200x200m) que se dibuja cuando se pincha
+  // una zona sin datos (area transparente = probablemente UV base, sin
+  // marca grafica propia en el plano - ver conversacion sobre
+  // "Default_usuelo"). Sirve para poder mostrar el mismo cuadro de info +
+  // precio de mercado en cualquier punto del mapa, no solo dentro de un
+  // poligono conocido. Desaparece cuando se cierra el popup asociado.
+  let tempSquareReady = false;
+  async function ensureTempSquareLayer() {
+    if (tempSquareReady) return;
+    tempSquareReady = true;
+    await safeAddSource('tempsquare', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map.addLayer({ id: 'tempsquare-fill', type: 'fill', source: 'tempsquare', paint: { 'fill-color': '#999999', 'fill-opacity': 0.25 } });
+    map.addLayer({ id: 'tempsquare-line', type: 'line', source: 'tempsquare', paint: { 'line-color': '#555', 'line-width': 1.5, 'line-dasharray': [2, 1] } });
+  }
+  function squareGeometry(lng, lat, halfMeters) {
+    const dLat = halfMeters / 111320;
+    const dLon = halfMeters / (111320 * Math.cos(lat * Math.PI / 180));
+    const ring = [
+      [lng - dLon, lat - dLat], [lng + dLon, lat - dLat],
+      [lng + dLon, lat + dLat], [lng - dLon, lat + dLat],
+      [lng - dLon, lat - dLat],
+    ];
+    return { type: 'Polygon', coordinates: [ring] };
+  }
+  function showTempSquare(geom) {
+    if (map.getSource('tempsquare')) {
+      map.getSource('tempsquare').setData({ type: 'FeatureCollection', features: [{ type: 'Feature', properties: {}, geometry: geom }] });
+    }
+  }
+  function hideTempSquare() {
+    if (map.getSource('tempsquare')) {
+      map.getSource('tempsquare').setData({ type: 'FeatureCollection', features: [] });
+    }
+  }
+
+  let openPopup = null;
+  let priceReqId = 0;
+  map.on('click', async (e) => {
+    const layers = ['zonas-fill', 'edif-pattern', 'quebradas-fill'].filter(id => map.getLayer(id));
+    const feats = map.queryRenderedFeatures(e.point, { layers });
+
+    const sections = [];
+    const seen = new Set();
+    let usoFeature = null, edifFeature = null, hasQuebrada = false;
+    feats.forEach(f => {
+      if (f.layer.id === 'zonas-fill' && !seen.has('uso')) { seen.add('uso'); usoFeature = f; }
+      if (f.layer.id === 'edif-pattern' && !seen.has('edif')) { seen.add('edif'); edifFeature = f; }
+      if (f.layer.id === 'quebradas-fill' && !seen.has('queb')) { seen.add('queb'); hasQuebrada = true; }
+    });
+
+    let tempGeom = null;
+    if (!usoFeature && !edifFeature && !hasQuebrada) {
+      // no hay ningun dato en este punto: se arma un cuadrado de 200x200m
+      // de referencia y se muestra info de la zona base + precio ahi.
+      await ensureTempSquareLayer();
+      tempGeom = squareGeometry(e.lngLat.lng, e.lngLat.lat, 100);
+      sections.push('<div style="font-size:14px;">🏗️ Se puede construir: <b>vivienda</b> <span style="color:#888;">(zona base UV, sin marca gráfica propia en este punto del plano)</span>.</div>');
+      sections.push('<div style="font-size:11px;color:#999;">Área de referencia: cuadrado de 200×200m centrado en el punto pinchado.</div>');
+    }
+
+    // resumen breve de "que se puede construir aqui", combinando uso de
+    // suelo + altura de edificacion + restriccion de quebrada
+    if (hasQuebrada) {
+      sections.push('<div style="font-size:14px;"><b style="color:#d7263d;">⚠ Restricción de quebrada — no edificable</b></div>');
+    } else if (usoFeature || edifFeature) {
+      const usoCode = usoFeature ? usoFeature.properties.codigo : null;
+      const esEquipamiento = usoCode && usoCode.startsWith('UEe');
+      let resumen;
+      if (usoCode) {
+        resumen = `Se puede construir: <b>${USO_SUMMARY[usoCode] || USO.labels[usoCode] || usoCode}</b>`;
+      } else {
+        resumen = 'Se puede construir:';
+      }
+      if (esEquipamiento) {
+        // en zonas de parque/equipamiento la trama de edificacion no aporta
+        // info nueva (repite lo mismo que uso de suelo), se omite
+      } else if (edifFeature) {
+        const edifCode = edifFeature.properties.codigo;
+        const tier = EDIF_TIER[edifCode];
+        resumen += `${usoCode ? ',' : ''} <b>${TIER_SUMMARY[tier] || tier}</b> (${edifCode})`;
+        const norma = NORMAS_EDIF[edifCode];
+        if (norma) {
+          resumen += `<br>🏢 Hasta <b>${norma.max_pisos} pisos (${norma.max_altura_m} m)</b> con proyecto de densificación`;
+        }
+      } else if (usoCode) {
+        resumen += ' <i>(sin dato de altura de edificación aquí)</i>';
+      }
+      sections.push(`<div style="font-size:14px;">🏗️ ${resumen}.</div>`);
+    }
+
+    if (usoFeature) {
+      const code = usoFeature.properties.codigo;
+      sections.push(`<div><b>Zonificación (Uso de Suelo):</b> ${USO.labels[code] || code}</div>`);
+    }
+    if (edifFeature) {
+      const code = edifFeature.properties.codigo;
+      const tier = EDIF_TIER[code];
+      sections.push(`<div><b>Norma de edificación:</b> ${EDIF_LABELS[code] || code} — ${TIER_LABEL[tier] || ''}</div>`);
+    }
+
+    // el precio de mercado se puede pedir con el bbox de cualquiera de las
+    // dos capas que hayan matcheado (uso de suelo si existe, si no, la
+    // geometria de edificacion), o si no matcheo nada, con el cuadrado
+    // temporal de 200x200m que se armo mas arriba.
+    const priceGeom = tempGeom || (usoFeature ? usoFeature.geometry : null) || (edifFeature ? edifFeature.geometry : null);
+    const myReq = ++priceReqId;
+    let priceHtml = '';
+    let bbox = null;
+    if (priceGeom) {
+      bbox = bboxOfGeometry(priceGeom);
+      priceHtml = `<div id="price-box-${myReq}">💰 Consultando precio de mercado (Portal Inmobiliario)…</div>`;
+      sections.push(priceHtml);
+    }
+
+    if (openPopup) openPopup.remove();
+    hideTempSquare();
+    if (tempGeom) showTempSquare(tempGeom);
+    openPopup = new maplibregl.Popup().setLngLat(e.lngLat)
+      .setHTML(sections.join('<hr style="margin:6px 0;border:none;border-top:1px solid #eee;">'))
+      .addTo(map);
+    openPopup.on('close', () => { hideTempSquare(); });
+
+    if (priceGeom) {
+      const { lon0, lon1, lat0, lat1 } = bbox;
+      const portalUrl = `https://www.portalinmobiliario.com/venta/_DisplayType_M_item*location_lat:${lat0.toFixed(5)}*${lat1.toFixed(5)},lon:${lon0.toFixed(5)}*${lon1.toFixed(5)}`;
+      fetch(`/api/precio?lon0=${lon0}&lon1=${lon1}&lat0=${lat0}&lat1=${lat1}`)
+        .then(r => r.json())
+        .then(data => {
+          if (myReq !== priceReqId) return; // el usuario ya pincho otra cosa
+          const box = document.getElementById(`price-box-${myReq}`);
+          if (!box) return;
+          let html;
+          if (data.error) {
+            html = `💰 No se pudo consultar el precio (${data.error}).`;
+          } else if (data.uf_m2_mediana) {
+            html = `💰 <b>${data.uf_m2_mediana} UF/m²</b> (n=${data.n_listados_validos} publicaciones)`;
+          } else {
+            html = `💰 Muestra insuficiente en esta zona (${data.n_listados_validos || 0} publicaciones con precio fijo).`;
+          }
+          html += `<br><a href="${portalUrl}" target="_blank" rel="noopener">Ver publicaciones en Portal Inmobiliario →</a>`;
+          box.innerHTML = html;
+        })
+        .catch(err => {
+          if (myReq !== priceReqId) return;
+          const box = document.getElementById(`price-box-${myReq}`);
+          if (box) box.innerHTML = `💰 Error consultando precio.<br><a href="${portalUrl}" target="_blank" rel="noopener">Ver publicaciones en Portal Inmobiliario →</a>`;
+        });
+    }
+  });
+
+  try { await loadQuebradas(); } catch (e) { console.error('no se pudo cargar quebradas', e); }
+  try { await loadZonas(); } catch (e) { console.error('no se pudo cargar zonas', e); }
+  try { await loadEdificacionTrama(); } catch (e) { console.error('no se pudo cargar edificacion', e); }
+
+  document.getElementById('uso-all').addEventListener('click', () => {
+    document.querySelectorAll('#legend-uso input').forEach(cb => { cb.checked = true; activeUso.add(cb.dataset.code); });
+    map.setFilter('zonas-fill', usoFilter()); map.setFilter('zonas-outline', usoFilter());
+  });
+  document.getElementById('uso-none').addEventListener('click', () => {
+    document.querySelectorAll('#legend-uso input').forEach(cb => { cb.checked = false; activeUso.delete(cb.dataset.code); });
+    map.setFilter('zonas-fill', usoFilter()); map.setFilter('zonas-outline', usoFilter());
+  });
+
+  function updateEdifQuickToggle(active) {
+    const btn = document.getElementById('edif-quick-toggle');
+    btn.textContent = active ? '− Quitar Edificación' : '+ Agregar Edificación';
+    btn.classList.toggle('active', active);
+  }
+  document.getElementById('chk-edif').addEventListener('change', (e) => {
+    setEdifVisible(e.target.checked);
+    document.getElementById('edif-tools').style.display = e.target.checked ? 'flex' : 'none';
+    document.getElementById('legend-edif').style.display = e.target.checked ? '' : 'none';
+    updateEdifQuickToggle(e.target.checked);
+  });
+  document.getElementById('edif-quick-toggle').addEventListener('click', () => {
+    document.getElementById('chk-edif').click();
+  });
+  document.getElementById('edif-all').addEventListener('click', () => {
+    document.querySelectorAll('#legend-edif input').forEach(cb => { cb.checked = true; activeEdif.add(cb.dataset.code); });
+    map.setFilter('edif-pattern', edifFilter()); map.setFilter('edif-outline', edifFilter());
+  });
+  document.getElementById('edif-none').addEventListener('click', () => {
+    document.querySelectorAll('#legend-edif input').forEach(cb => { cb.checked = false; activeEdif.delete(cb.dataset.code); });
+    map.setFilter('edif-pattern', edifFilter()); map.setFilter('edif-outline', edifFilter());
+  });
+
+  document.getElementById('chk-quebradas').addEventListener('change', (e) => {
+    const v = e.target.checked ? 'visible' : 'none';
+    map.setLayoutProperty('quebradas-fill', 'visibility', v);
+    map.setLayoutProperty('quebradas-line', 'visibility', v);
+  });
+})();
+</script>
+</body>
+</html>

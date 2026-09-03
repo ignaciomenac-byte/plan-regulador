@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Demo: sectores por capas combinadas</title>
+<script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+<link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
+<style>
+  html, body, #map { height: 100%; margin: 0; font-family: -apple-system, sans-serif; }
+  #panel {
+    position: absolute; top: 10px; left: 10px; z-index: 1;
+    background: white; padding: 14px 18px; border-radius: 8px;
+    font-size: 13px; box-shadow: 0 2px 8px rgba(0,0,0,.25); width: 260px;
+  }
+  #panel h3 { margin: 0 0 10px; font-size: 14px; }
+  .opt { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+  #count { margin-top: 10px; font-weight: 600; }
+  .maplibregl-popup-content { font-size: 13px; }
+</style>
+</head>
+<body>
+<div id="panel">
+  <h3>Sector = predios disueltos por capas</h3>
+  <div class="opt"><label><input type="checkbox" id="chk-predios"> Ver predios individuales (base)</label></div>
+  <div class="opt"><label><input type="checkbox" id="chk-uso" checked> + Uso de Suelo</label></div>
+  <div class="opt"><label><input type="checkbox" id="chk-edif"> + Edificación</label></div>
+  <div class="opt"><label><input type="checkbox" id="chk-cuadras"> Ver cuadras (beta, desde soleras)</label></div>
+  <div id="count"></div>
+</div>
+<div id="map"></div>
+<script>
+const map = new maplibregl.Map({
+  container: 'map',
+  style: {
+    version: 8,
+    sources: {
+      osm: { type: 'raster', tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'], tileSize: 256, attribution: '© OpenStreetMap' }
+    },
+    layers: [{ id: 'osm', type: 'raster', source: 'osm', paint: { 'raster-opacity': 0.55 } }]
+  },
+  center: [-70.5605, -33.4155],
+  zoom: 15.5
+});
+window.map = map;
+
+function colorFor(str) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) >>> 0;
+  return `hsl(${h % 360}, 62%, 55%)`;
+}
+
+async function loadLayer(id, url, propName) {
+  const data = await fetch(url).then(r => r.json());
+  data.features.forEach(f => { f.properties.__color = colorFor(String(f.properties[propName])); });
+  if (map.getSource(id)) {
+    map.getSource(id).setData(data);
+  } else {
+    for (let attempt = 0; attempt < 20; attempt++) {
+      try { map.addSource(id, { type: 'geojson', data }); break; }
+      catch (e) {
+        if (attempt === 19) throw e;
+        await new Promise(r => setTimeout(r, 300));
+      }
+    }
+    map.addLayer({
+      id: id + '-fill', type: 'fill', source: id,
+      paint: { 'fill-color': ['get', '__color'], 'fill-opacity': 0.55 }
+    });
+    map.addLayer({
+      id: id + '-line', type: 'line', source: id,
+      paint: { 'line-color': '#222', 'line-width': 0.8 }
+    });
+    map.on('click', id + '-fill', (e) => {
+      const p = e.features[0].properties;
+      new maplibregl.Popup().setLngLat(e.lngLat)
+        .setHTML(`<b>${p[propName]}</b>`).addTo(map);
+    });
+    map.on('mouseenter', id + '-fill', () => map.getCanvas().style.cursor = 'pointer');
+    map.on('mouseleave', id + '-fill', () => map.getCanvas().style.cursor = '');
+  }
+  return data.features.length;
+}
+
+function setVisible(id, visible) {
+  if (!map.getLayer(id + '-fill')) return;
+  const v = visible ? 'visible' : 'none';
+  map.setLayoutProperty(id + '-fill', 'visibility', v);
+  map.setLayoutProperty(id + '-line', 'visibility', v);
+}
+
+async function refresh() {
+  const useEdif = document.getElementById('chk-edif').checked;
+  const useUso = document.getElementById('chk-uso').checked;
+  const showPredios = document.getElementById('chk-predios').checked;
+
+  let n;
+  if (useUso && useEdif) {
+    n = await loadLayer('sectores', 'sample_dissolve_uso_edif.geojson', 'sector');
+    document.getElementById('count').textContent = `${n} sectores (Uso + Edificación)`;
+  } else if (useUso) {
+    n = await loadLayer('sectores', 'sample_dissolve_uso.geojson', 'sector');
+    document.getElementById('count').textContent = `${n} sectores (solo Uso de Suelo)`;
+  } else {
+    n = await loadLayer('sectores', 'sample_predios.geojson', 'uso');
+    document.getElementById('count').textContent = `${n} predios (sin disolver)`;
+  }
+  setVisible('predios', showPredios);
+}
+
+async function waitForStyle(maxMs) {
+  const start = Date.now();
+  while (Date.now() - start < maxMs) {
+    try {
+      map.getStyle();
+      if (map.style && map.style._loaded && map.isStyleLoaded()) return;
+    } catch (e) {}
+    await new Promise(r => setTimeout(r, 250));
+  }
+}
+
+(async () => {
+ try {
+  await waitForStyle(6000);
+  await loadLayer('predios', 'sample_predios.geojson', 'uso');
+  const bounds = new maplibregl.LngLatBounds();
+  map.getSource('predios')._data.features.forEach(f => {
+    f.geometry.coordinates[0].forEach(c => bounds.extend(c));
+  });
+  map.fitBounds(bounds, { padding: 20, duration: 0 });
+  setVisible('predios', false);
+  map.setPaintProperty('predios-fill', 'fill-opacity', 0.08);
+  map.setPaintProperty('predios-line', 'line-color', '#666');
+  map.setPaintProperty('predios-line', 'line-width', 0.4);
+  await refresh();
+
+  await loadLayer('cuadras', 'sample_cuadras.geojson', 'cuadra_id');
+  map.setPaintProperty('cuadras-fill', 'fill-opacity', 0.0);
+  map.setPaintProperty('cuadras-line', 'line-color', '#ff00aa');
+  map.setPaintProperty('cuadras-line', 'line-width', 2);
+  setVisible('cuadras', false);
+
+  ['chk-predios', 'chk-uso', 'chk-edif'].forEach(id => {
+    document.getElementById(id).addEventListener('change', refresh);
+  });
+  document.getElementById('chk-cuadras').addEventListener('change', (e) => {
+    setVisible('cuadras', e.target.checked);
+  });
+ } catch (e) {
+   window.__initError = e;
+   document.getElementById('count').textContent = 'ERROR: ' + e.message;
+ }
+})();
+</script>
+</body>
+</html>

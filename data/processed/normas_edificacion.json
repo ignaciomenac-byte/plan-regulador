@@ -1,0 +1,74 @@
+{
+  "EAb4": {
+    "base_pisos": 3,
+    "base_altura_m": 10.5,
+    "max_pisos": 4,
+    "max_altura_m": 14.0
+  },
+  "EAb4p": {
+    "base_pisos": 3,
+    "base_altura_m": 10.5,
+    "max_pisos": 4,
+    "max_altura_m": 14.0
+  },
+  "EAm1": {
+    "base_pisos": 3,
+    "base_altura_m": 10.5,
+    "max_pisos": 4,
+    "max_altura_m": 14.0
+  },
+  "EAm1p": {
+    "base_pisos": 3,
+    "base_altura_m": 10.5,
+    "max_pisos": 7,
+    "max_altura_m": 24.5
+  },
+  "EAm2": {
+    "base_pisos": 3,
+    "base_altura_m": 10.5,
+    "max_pisos": 7,
+    "max_altura_m": 20.0
+  },
+  "EAm4": {
+    "base_pisos": 3,
+    "base_altura_m": 10.5,
+    "max_pisos": 12,
+    "max_altura_m": 42.0
+  },
+  "EAa1": {
+    "base_pisos": 3,
+    "base_altura_m": 10.5,
+    "max_pisos": 12,
+    "max_altura_m": 42.0
+  },
+  "EAa2": {
+    "base_pisos": 3,
+    "base_altura_m": 10.5,
+    "max_pisos": 15,
+    "max_altura_m": 52.5
+  },
+  "EAa3": {
+    "base_pisos": 3,
+    "base_altura_m": 10.5,
+    "max_pisos": 15,
+    "max_altura_m": 52.5
+  },
+  "EAa4": {
+    "base_pisos": 3,
+    "base_altura_m": 10.5,
+    "max_pisos": 12,
+    "max_altura_m": 42.0
+  },
+  "EAa+cm": {
+    "base_pisos": 3,
+    "base_altura_m": 10.5,
+    "max_pisos": 17,
+    "max_altura_m": 59.5
+  },
+  "EAa+ca": {
+    "base_pisos": 3,
+    "base_altura_m": 10.5,
+    "max_pisos": 15,
+    "max_altura_m": 52.5
+  }
+}
