@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: plan-regulador-las-condes
+    name: plan-regulador
     env: python
     plan: free
     buildCommand: pip install -r requirements.txt
